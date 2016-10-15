@@ -127,23 +127,55 @@ public class MessageBusImpl implements MessageBus {
 
 	@Override
 	public void unregister(MicroService m) {
-		Class<? extends Request> key;
+		
+		// Remove the MicroService from allQueues:
 		allQueues.remove(m);
+		
 		// Remove the MicroService from req2Requester:
+		Class<? extends Request> key;
+
 		Set<Entry<Class<? extends Request>, MicroService>> set = req2Requester.entrySet();
-		Iterator<Entry<Class<? extends Request>, MicroService>> it = set.iterator();
-		while(it.hasNext()){
-			if(it.next().getValue().equals(m)){
-				key = it.next().getKey();
+		Iterator<Entry<Class<? extends Request>, MicroService>> it1 = set.iterator();
+		while(it1.hasNext()){
+			if(it1.next().getValue().equals(m)){
+				key = it1.next().getKey();
 				req2Requester.remove(key);
 			}
 		}
+		
+		// Remove the MicroService from req2Subs:
+		ConcurrentLinkedQueue<Class<? extends Request>> reqsOfSub = sub2Requests.get(m);
+		Iterator<Class<? extends Request>> it2 = reqsOfSub.iterator();
+		while(it2.hasNext()){
+			request2Subs.get(it2.next()).remove(m); // Delete the MicroService from being a subscriber of the Requests he used to subscribe for 
+		}
+		
+		// Remove the MicroService from sub2Requests:
+		sub2Requests.remove(m);
+		
+		// Remove the MicroService from req2Broadcasts:
+		ConcurrentLinkedQueue<Class<? extends Broadcast>> brodsOfSub = sub2Broadcasts.get(m);
+		Iterator<Class<? extends Broadcast>> it3 = brodsOfSub.iterator();
+		while(it3.hasNext()){
+			broadcast2Subs.get(it3.next()).remove(m); // Delete the MicroService from being a subscriber of the Broadcasts he used to subscribe for 
+		}
+		// Remove the MicroService from sub2Broadcasts:
+		sub2Broadcasts.remove(m);
+		
+		
 	}
 
 	@Override
 	public Message awaitMessage(MicroService m) throws InterruptedException {
-		// TODO Auto-generated method stub
-		return null;
+		Message retVal = null;
+		ConcurrentLinkedQueue<Message> q = allQueues.get(m);
+		if(q == null){
+			throw new InterruptedException();
+		}
+		while(retVal == null){
+			retVal = q.poll();
+		}
+		return retVal;
 	}
 
 
