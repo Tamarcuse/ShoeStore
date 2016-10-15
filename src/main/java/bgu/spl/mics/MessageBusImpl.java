@@ -3,6 +3,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.Map.Entry;
 import java.util.Set;
 
 public class MessageBusImpl implements MessageBus {
@@ -21,30 +22,31 @@ public class MessageBusImpl implements MessageBus {
 	// ***********  /Singleton **************	
 	
 	private ConcurrentHashMap<MicroService , ConcurrentLinkedQueue<Message>> allQueues = new ConcurrentHashMap<>();                          // Mapping from a microService name to it's message-queue
-	private ConcurrentHashMap<Class <? extends Request>, ConcurrentLinkedQueue<MicroService>> requestToSubs = new ConcurrentHashMap<>();     // Mapping from a Request type to a queue of the MicroServices'-queues which are subscribed to it
-	private ConcurrentHashMap<Class <? extends Broadcast>, ConcurrentLinkedQueue<MicroService>> broadcastToSubs = new ConcurrentHashMap<>(); // Mapping from a Broadcast type to a queue of the MicroServices'-queues which are subscribed to it
-	private ConcurrentHashMap<MicroService, ConcurrentLinkedQueue<Class <? extends Request>>> subToRequests = new ConcurrentHashMap<>();     // Mapping from a MicroService to requests it is subscribed to
-	private ConcurrentHashMap<MicroService, ConcurrentLinkedQueue<Class <? extends Broadcast>>> subToBroadcasts = new ConcurrentHashMap<>(); // Mapping from a MicroService to requests it is subscribed to
-	private ConcurrentHashMap<Class <? extends Request>, ConcurrentLinkedQueue<Message>> req2Requester = new ConcurrentHashMap<>();          // Mapping from a Request message to the queue of the the requesting MicroService
+	// Every access to a MicroService queue goes through allQueues!!
+	
+	private ConcurrentHashMap<Class <? extends Request>, ConcurrentLinkedQueue<MicroService>> request2Subs = new ConcurrentHashMap<>();     // Mapping from a Request type to a queue of the MicroServices'-queues which are subscribed to it
+	private ConcurrentHashMap<Class <? extends Broadcast>, ConcurrentLinkedQueue<MicroService>> broadcast2Subs = new ConcurrentHashMap<>(); // Mapping from a Broadcast type to a queue of the MicroServices'-queues which are subscribed to it
+	private ConcurrentHashMap<MicroService, ConcurrentLinkedQueue<Class <? extends Request>>> sub2Requests = new ConcurrentHashMap<>();     // Mapping from a MicroService to requests it is subscribed to
+	private ConcurrentHashMap<MicroService, ConcurrentLinkedQueue<Class <? extends Broadcast>>> sub2Broadcasts = new ConcurrentHashMap<>(); // Mapping from a MicroService to requests it is subscribed to
+	private ConcurrentHashMap<Class <? extends Request>, MicroService> req2Requester = new ConcurrentHashMap<>();          // Mapping from a Request message to the queue of the the requesting MicroService
 	
 	private void addToSub2Broadcasts(MicroService ms, Class <? extends Broadcast> brdCstType){
 		if(brdCstType != null){
-			subToBroadcasts.putIfAbsent(ms, new ConcurrentLinkedQueue<>());
-			subToBroadcasts.get(ms).add(brdCstType);
+			sub2Broadcasts.putIfAbsent(ms, new ConcurrentLinkedQueue<>());
+			sub2Broadcasts.get(ms).add(brdCstType);
 		}
 	}
 	
-	private void addToreq2Requester(Class <? extends Request> reqType , Message msg){
-		if(msg != null){
-			req2Requester.putIfAbsent(reqType, new ConcurrentLinkedQueue<>());
-			req2Requester.get(reqType).add(msg);
+	private void addToreq2Requester(Class <? extends Request> reqType , MicroService ms){
+		if(ms != null){
+			req2Requester.put(reqType, ms);
 		}
 	}
 	
 	private void addToSub2Requests(MicroService ms, Class <? extends Request> reqType){
 		if(reqType != null){
-			subToRequests.putIfAbsent(ms, new ConcurrentLinkedQueue<>());
-			subToRequests.get(ms).add(reqType);
+			sub2Requests.putIfAbsent(ms, new ConcurrentLinkedQueue<>());
+			sub2Requests.get(ms).add(reqType);
 		}
 	}
 	
@@ -52,19 +54,22 @@ public class MessageBusImpl implements MessageBus {
 		if(msg != null && allQueues.containsKey(ms)){
 			allQueues.get(ms).add(msg);
 		}
+		else{
+			System.out.println("No such MicroService or Message is null");
+		}
 	}
 	
 	private void addSubToReq2Subs(Class <? extends Request> req ,MicroService sub){
 		if(sub != null){
-			requestToSubs.putIfAbsent(req, new ConcurrentLinkedQueue<>());
-			requestToSubs.get(req).add(sub);
+			request2Subs.putIfAbsent(req, new ConcurrentLinkedQueue<>());
+			request2Subs.get(req).add(sub);
 		}
 	}
 	
 	private void addToBroadcast2Subs(Class <? extends Broadcast> brdcst ,MicroService sub){
 		if(sub != null){
-			broadcastToSubs.putIfAbsent(brdcst, new ConcurrentLinkedQueue<>());
-			broadcastToSubs.get(brdcst).add(sub);
+			broadcast2Subs.putIfAbsent(brdcst, new ConcurrentLinkedQueue<>());
+			broadcast2Subs.get(brdcst).add(sub);
 		}
 	}
 	
@@ -85,12 +90,12 @@ public class MessageBusImpl implements MessageBus {
 	
 	public <T> void complete(Request<T> r, T result) {
 		RequestCompleted<T> rCompleted = new RequestCompleted<T>(r, result);
-		req2Requester.get(r).add(rCompleted);
+		addToMsQueue(req2Requester.get(r), rCompleted);
 	}
 
 	@Override
 	public void sendBroadcast(Broadcast b) {
-		ConcurrentLinkedQueue<MicroService> bList = broadcastToSubs.get(b);
+		ConcurrentLinkedQueue<MicroService> bList = broadcast2Subs.get(b);
 		Iterator<MicroService> it = bList.iterator();
 		while(it.hasNext()){
 			addToMsQueue(it.next(), b);
@@ -101,11 +106,11 @@ public class MessageBusImpl implements MessageBus {
 	// We poll a subscriber out of the DS and use it and add it back to the end of the DS
 	// thus creating a round robin way of work and that's why the method is synchronized
 	public synchronized boolean sendRequest(Request<?> r, MicroService requester) {
-		MicroService sub = requestToSubs.get(r).poll();
+		MicroService sub = request2Subs.get(r).poll();
 		if(sub != null){
 			addToMsQueue(sub, r);
-			req2Requester.put(r.getClass(), allQueues.get(requester));
-			requestToSubs.get(r).add(sub);
+			addToreq2Requester(r.getClass(), requester);
+			addSubToReq2Subs(r.getClass(), sub);
 			return true;
 		}
 		return false;
@@ -122,9 +127,17 @@ public class MessageBusImpl implements MessageBus {
 
 	@Override
 	public void unregister(MicroService m) {
+		Class<? extends Request> key;
 		allQueues.remove(m);
-		Set<? extends Request> set = req2Requester.entrySet()
-		
+		// Remove the MicroService from req2Requester:
+		Set<Entry<Class<? extends Request>, MicroService>> set = req2Requester.entrySet();
+		Iterator<Entry<Class<? extends Request>, MicroService>> it = set.iterator();
+		while(it.hasNext()){
+			if(it.next().getValue().equals(m)){
+				key = it.next().getKey();
+				req2Requester.remove(key);
+			}
+		}
 	}
 
 	@Override
